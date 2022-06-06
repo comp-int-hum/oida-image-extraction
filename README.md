@@ -42,3 +42,5 @@ An input file is only processed if `some_output_directory/FILE_NAME` doesn't alr
 It might be worthwhile to be more sophisticated about determining input file format, e.g. using magic bytes, particularly if the data sources become less constrained or curated.  This could include the image-extraction stage for the newer formats, where each zip archive member could be tested, rather than also relying on file extensions.
 
 The Hachoir approach used on the older formats is very general (searching for known patterns at the bit level), and so could prove useful for adding arbitrary additional input format handlers (i.e. branches to the main if-statement).  Care should be taken to ensure that Hachoir is being given uncompressed and/or unencrypted files, otherwise the bit-patterns won't be meaningful.
+
+There are a handful of false positives, particularly ".wmf" files.
