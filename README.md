@@ -31,6 +31,20 @@ In most cases you would likely run something like this, to process an entire dir
 python scripts/process_files.py --output some_output_directory some_input_directory/*
 ```
 
+Alternatively, and perhaps more conveniently, the script can act on and write to archives:
+
+```
+python scripts/process_files.py --archive_mode --output some_output.zip some_input.zip some_other_input.zip ...
+```
+
+Finally, given a zip file of images such as produced by the above method, a filtered archive can be created with:
+
+```
+python scripts/filter_files.py --input some_output.zip --output filtered_output.zip
+```
+
+By default, the filter will exclude PDF files or files with "thumb" in the name, and images with width or height less than 200 pixels or entropy less than 6.0.  These defaults can be specified differently on the command line, see the script's help message for details (i.e. using the "-h" switch).
+
 ## Input, Processing, and Output
 
 The script currently handles the old and new formats of Microsoft Powerpoint and Excel, which it distinguishes based on file extension.  The old formats are searched for known bit-patterns corresponding to file formats (using the Hachoir library), while the new formats are unpacked as zip archives and filtered for image extensions.  In all cases, each image found in a given input file `FILE_NAME` is extracted to `some_output_directory/FILE_NAME/IMAGE_NAME`, and so remains unambiguously associated with its source.
