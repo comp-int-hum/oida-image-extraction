@@ -57,7 +57,8 @@ if __name__ == "__main__":
                     with open(output_fname, "rb") as nested_ifd:
                         process_file(os.path.basename(output_fname), nested_ifd, prefix=name, temp_path=temp_path)
                 os.remove(output_fname)
-        elif ext in [".gif", ".jpeg", ".jpg", ".png", ".wmf", ".pdf"]:
+        #elif ext in [".gif", ".jpeg", ".jpg", ".png", ".wmf", ".pdf"]:
+        elif ext in [".jpeg", ".jpg", ".png"]:            
             logging.info("Adding to archive at '%s'", name)
             with ofd_zip.open(name, "w") as image_ofd:
                 image_ofd.write(fhandle.read())
