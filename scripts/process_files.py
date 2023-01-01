@@ -17,9 +17,12 @@ if __name__ == "__main__":
     parser.add_argument(dest="inputs", nargs="+", help="Any number and mixture of Powerpoint and Excel files to process")
     parser.add_argument("--output", dest="output", help="Path under which to save extracted images")
     parser.add_argument("--archive_mode", dest="archive_mode", default=False, action="store_true", help="Inputs are archives (zip or tar)")
+    parser.add_argument("--start", dest="start", default=0, type=int)
+    parser.add_argument("--count", dest="count",  type=int)
+    parser.add_argument("--log_level", dest="log_level", choices=["DEBUG", "INFO", "WARN", "ERROR"], default="INFO")
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.WARN)
+    logging.basicConfig(level=getattr(logging, args.log_level))
 
 
     ofd_zip = zipfile.ZipFile(args.output, "a")
@@ -63,8 +66,8 @@ if __name__ == "__main__":
             with ofd_zip.open(name, "w") as image_ofd:
                 image_ofd.write(fhandle.read())
             all_names.add(name)
-            if len(all_names) % 1000 == 0:
-                logging.warning("%d image files in archive", len(all_names))
+            #if len(all_names) % 1000 == 0:
+            #    logging.warning("%d image files in archive", len(all_names))
         elif "." not in fname or ext in [".ocr"]:
             logging.info("Skipping directory or file with known-non-image extension")
         else:
@@ -73,18 +76,33 @@ if __name__ == "__main__":
             
     if args.archive_mode:
         temp_path = tempfile.mkdtemp()
-
+        current = 0        
         try:
             for fname in args.inputs:
                 logging.info("Processing archive '%s'", fname)
                 if tarfile.is_tarfile(fname):
                     with tarfile.open(fname, "r") as ifd:
                         for member in ifd:
-                            process_file(member.name, ifd.extractfile(member), temp_path=temp_path)
+                            if current >= args.start + args.count:
+                                break
+                            if member.name.endswith("zip"):
+                                if current < args.start:
+                                    pass
+                                else:
+                                    process_file(member.name, ifd.extractfile(member), temp_path=temp_path)
+                                current += 1
+                                print(current)
                 elif zipfile.is_zipfile(fname):
                     with zipfile.ZipFile(fname, "r") as ifd:
-                        for item in ifd.getitems():
-                            process_file(item.filename, ifd.open(item), temp_path=temp_path)
+                        for item in ifd.infolist():
+                            if current >= args.start + args.count:
+                                break
+                            if item.filename.endswith("zip"):
+                                if current < args.start:
+                                    pass
+                                else:
+                                    process_file(item.filename, ifd.open(item), temp_path=temp_path)
+                                current += 1
         except Exception as e:
             raise e
         finally:
