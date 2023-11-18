@@ -1,4 +1,6 @@
 import subprocess
+import re
+import sys
 import os.path
 import os
 import argparse
@@ -11,41 +13,55 @@ import tempfile
 import shutil
 
 
-if __name__ == "__main__":
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument(dest="inputs", nargs="+", help="Any number and mixture of Powerpoint and Excel files to process")
-    parser.add_argument("--output", dest="output", help="Path under which to save extracted images")
-    parser.add_argument("--archive_mode", dest="archive_mode", default=False, action="store_true", help="Inputs are archives (zip or tar)")
-    parser.add_argument("--start", dest="start", default=0, type=int)
-    parser.add_argument("--count", dest="count",  type=int)
-    parser.add_argument("--log_level", dest="log_level", choices=["DEBUG", "INFO", "WARN", "ERROR"], default="INFO")
-    args = parser.parse_args()
-
-    logging.basicConfig(level=getattr(logging, args.log_level))
+logger = logging.getLogger("process_files")
 
 
-    ofd_zip = zipfile.ZipFile(args.output, "a")
-    all_names = set()
-    for name in ofd_zip.namelist():
-        all_names.add(name)
-
-
-    def process_file(fname, fhandle, prefix="", temp_path=None):
-        ext = os.path.splitext(fname.lower())[-1]
+# Extracts images, recursing into zip/tar archives as needed,
+# keeping a counter and only writing to output file if between
+# the minimum and maximum specified indices (stopping early if
+# counter exceeds the latter).  Has to pass along lots of ugly
+# configuration info with each recursion, could be much more
+# elegant.
+def process_file(
+        final_ofd,
+        current_index,
+        fname, 
+        fhandle=None, 
+        prefix="", 
+        temp_path=None, 
+        image_exts=[".jpeg", ".jpg", ".png"],
+        zip_exts=[".zip", ".pptx", ".xlsx"],
+        tar_exts=[".tar", ".tgz", ".tbz2", ".tar.gz", ".tar.bz2"],
+        old_exts=[".ppt", ".xls"],        
+        min_index=0,
+        max_index=None
+):
+    # Only keep processing if below upper limit/upper limit not set
+    if not (max_index and current_index >= max_index):
+        ext = re.match(r".*?((\.tar)?\.[^\.]+)$", fname.lower())
+        ext = ext.group(1) if ext else None
         name = os.path.join(prefix, fname.strip("/"))
-        logging.info("Processing file '%s'", fname)
-        if name in all_names:
-            logging.info("Skipping item already in the output")
-        elif ext in [".zip", ".pptx", ".xlsx"]:
-            logging.debug("Recursively processing contents")
+        logger.debug("Processing file '%s'", fname)
+        if ext in zip_exts:
+            logger.debug("Recursively processing a zip file")
             with zipfile.ZipFile(fhandle, "r") as nested_ifd:
                 for nested_fname in nested_ifd.namelist():
-                    process_file(nested_fname, nested_ifd.open(nested_fname, "r"), prefix=name, temp_path=temp_path)
-        
-        elif ext in [".xls", ".ppt"]:
-            logging.debug("Treating as old Microsoft format")
-            all_names.add(fname)
+                    current_index = process_file(
+                        final_ofd,
+                        current_index,
+                        nested_fname,
+                        nested_ifd.open(nested_fname, "r"), 
+                        prefix=name, 
+                        temp_path=temp_path,
+                        min_index=min_index,
+                        max_index=max_index,
+                        image_exts=image_exts,
+                        zip_exts=zip_exts,
+                        old_exts=old_exts,
+                        tar_exts=tar_exts
+                    )
+        elif ext in old_exts:
+            logger.debug("Treating '%s' as old Microsoft format", fname)
             input_fname = os.path.join(temp_path, os.path.basename(fname))
             with open(input_fname, "wb") as ofd:
                 ofd.write(fhandle.read())
@@ -56,83 +72,102 @@ if __name__ == "__main__":
             )
             pid.communicate()
             for output_fname in glob(os.path.join(temp_path, "*")):
+                current_index += 1
                 if output_fname != input_fname:
                     with open(output_fname, "rb") as nested_ifd:
-                        process_file(os.path.basename(output_fname), nested_ifd, prefix=name, temp_path=temp_path)
+                        current_index = process_file(
+                            final_ofd,
+                            current_index,
+                            os.path.basename(output_fname), 
+                            nested_ifd, 
+                            prefix=name, 
+                            temp_path=temp_path,
+                            min_index=min_index,
+                            max_index=max_index,
+                            image_exts=image_exts,
+                            zip_exts=zip_exts,
+                            old_exts=old_exts,
+                            tar_exts=tar_exts
+                        )
                 os.remove(output_fname)
-        #elif ext in [".gif", ".jpeg", ".jpg", ".png", ".wmf", ".pdf"]:
-        elif ext in [".jpeg", ".jpg", ".png"]:            
-            logging.info("Adding to archive at '%s'", name)
-            with ofd_zip.open(name, "w") as image_ofd:
-                image_ofd.write(fhandle.read())
-            all_names.add(name)
-            #if len(all_names) % 1000 == 0:
-            #    logging.warning("%d image files in archive", len(all_names))
-        elif "." not in fname or ext in [".ocr"]:
-            logging.info("Skipping directory or file with known-non-image extension")
-        else:
-            logging.info("Skipping file with unknown extension ('%s')", fname)
-
-            
-    if args.archive_mode:
-        temp_path = tempfile.mkdtemp()
-        current = 0        
-        try:
-            for fname in args.inputs:
-                logging.info("Processing archive '%s'", fname)
-                if tarfile.is_tarfile(fname):
-                    with tarfile.open(fname, "r") as ifd:
-                        for member in ifd:
-                            if current >= args.start + args.count:
-                                break
-                            if member.name.endswith("zip"):
-                                if current < args.start:
-                                    pass
-                                else:
-                                    process_file(member.name, ifd.extractfile(member), temp_path=temp_path)
-                                current += 1
-                                print(current)
-                elif zipfile.is_zipfile(fname):
-                    with zipfile.ZipFile(fname, "r") as ifd:
-                        for item in ifd.infolist():
-                            if current >= args.start + args.count:
-                                break
-                            if item.filename.endswith("zip"):
-                                if current < args.start:
-                                    pass
-                                else:
-                                    process_file(item.filename, ifd.open(item), temp_path=temp_path)
-                                current += 1
-        except Exception as e:
-            raise e
-        finally:
-            shutil.rmtree(temp_path)
-    else:
-        
-        for fname in args.inputs:
-            base = os.path.basename(fname)
-            ext = os.path.splitext(base.lower())[-1]
-            dest = os.path.join(args.output, base)
-            if os.path.exists(dest):
-                logging.info("Not processing file '%s' because the directory '%s' already exists!", fname, dest)
+        elif ext in image_exts:
+            current_index += 1
+            if current_index > min_index:
+                logger.debug("Adding image to archive as '%s'", name)
+                with final_ofd.open(name, "w") as image_ofd:
+                    image_ofd.write(fhandle.read())
             else:
-                os.makedirs(dest)
-                if ext in [".xls", ".ppt"]:
-                    pid = subprocess.Popen(
-                        shlex.split("python -m hachoir.subfile --category image {} {}".format(fname, dest)),
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE
+                logger.debug("Skipping image '%s'", name)
+        elif ((sys.version_info >= (3,9) and tarfile.is_tarfile(fhandle)) or ext in tar_exts):
+            logger.debug("Recursively processing a tar file")
+            with tarfile.open(fileobj=fhandle) as nested_ifd:
+                for member in nested_ifd:
+                    current_index = process_file(
+                        final_ofd,
+                        current_index,
+                        member.name,
+                        nested_ifd.extractfile(member),
+                        prefix=name,
+                        temp_path=temp_path,
+                        min_index=min_index,
+                        max_index=max_index,
+                        image_exts=image_exts,
+                        zip_exts=zip_exts,
+                        old_exts=old_exts,
+                        tar_exts=tar_exts
                     )
-                    pid.communicate()
-                elif ext in [".pptx", ".xlsx"]:
-                    with zipfile.ZipFile(fname, "r") as zfd:
-                        for member in zfd.namelist():
-                            mext = os.path.splitext(member)[1].lower()
-                            if mext in [".gif", ".jpeg", ".jpg", ".png", ".wmf"]:
-                                subdest = os.path.join(dest, os.path.dirname(member))                            
-                                if not os.path.exists(subdest):
-                                    os.makedirs(subdest)                                
-                                with open(os.path.join(dest, member), "wb") as ofd:
-                                    ofd.write(zfd.read(member))
-                else:
-                    raise Exception("Unknown file extension: {}".format(ext))
+        else:
+            logger.debug("Skipping file with unknown extension/content ('%s')", fname)
+    return current_index
+
+
+if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        dest="inputs", 
+        nargs="+", 
+        help="Any number and mixture of Powerpoint and Excel files to process (or zip/tar files in archive mode)"
+    )
+    parser.add_argument("--output", dest="output", help="Zip file to append extracted images to (will be created if necessary)", required=True)
+    parser.add_argument("--start", dest="start", default=0, type=int, help="Which image index to start saving at")
+    parser.add_argument("--count", dest="count",  type=int, help="How many images to save")
+    parser.add_argument("--image_extensions", dest="image_extensions", nargs="*", default=[".jpg", ".jpeg", ".png"])
+    parser.add_argument("--zip_extensions", dest="zip_extensions", nargs="*", default=[".zip", ".xlsx", ".pptx"])
+    parser.add_argument("--old_extensions", dest="old_extensions", nargs="*", default=[".ppt", ".xls"])
+    parser.add_argument("--tar_extensions", dest="tar_extensions", nargs="*", default=[".tar", ".tgz", ".tbz2", ".tar.bz2", ".tar.gz"])
+    parser.add_argument("--log_level", dest="log_level", choices=["DEBUG", "INFO", "WARN", "ERROR"], default="INFO")
+    args = parser.parse_args()
+
+    # Prints lots of information while running: set the log level to e.g. "WARN" 
+    # for less verbosity.
+    logging.basicConfig(level=getattr(logging, args.log_level))
+
+    # The temporary path is used for invoking the command-line
+    # 'hachoir' tool.
+    temp_path = tempfile.mkdtemp()
+
+    current_index = 0
+    try:
+        with zipfile.ZipFile(args.output, "w") as ofd:
+            for fname in args.inputs:
+                logger.info("Processing top-level file '%s'", fname)
+                with open(fname, "rb") as ifd:
+                    current_index = process_file(
+                        ofd,
+                        current_index,
+                        fname,
+                        fhandle=ifd,
+                        temp_path=temp_path, 
+                        image_exts=args.image_extensions,
+                        zip_exts=args.zip_extensions,
+                        old_exts=args.old_extensions,
+                        tar_exts=args.tar_extensions,
+                        min_index=args.start,
+                        max_index=args.start + args.count if args.count else None
+                    )
+    except Exception as e:
+        raise e
+    finally:
+        # Clean up temporary path used for hachoir subprocesses.
+        shutil.rmtree(temp_path)
